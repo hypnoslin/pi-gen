@@ -2,9 +2,14 @@
 
 # Function to check if a hostname is in use
 is_hostname_in_use() {
-    local hostname=$1
-    ping -c 1 -W 1 "$hostname" &> /dev/null
-    return $?
+    local hostname="$1"
+    if ping -c 1 -W 1 "$hostname" > /dev/null 2>&1; then
+        echo "Hostname $hostname is in use."
+        return 0
+    else
+        echo "Hostname $hostname is available."
+        return 1
+    fi
 }
 
 # Iterate over hostnames from obmc-01 to obmc-99

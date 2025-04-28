@@ -1,10 +1,11 @@
 [Unit]
 Description=Set OpenBMC Hostname on First Boot
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/set-obmc-hostname.sh
+ExecStart=/bin/bash /usr/local/bin/set-obmc-hostname.sh
 RemainAfterExit=true
 
 [Install]
