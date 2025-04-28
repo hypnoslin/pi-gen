@@ -1,4 +1,4 @@
-# Example configuration for BMC
+# Example configuration for BIOS
 pu port             /dev/ttyUSB0
 pu baudrate         115200          # Set the baud rate
 pu rtscts           No

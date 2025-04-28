@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import re
+import socket
+import sys
+import time
+from typing import Optional, Tuple
+
+import requests
+
+
+class PDUController:
+    def __init__(
+        self, host: Optional[str] = None, outlet: Optional[int] = None
+    ):
+        # Determine PDU host and outlet based on local hostname if not specified
+        if host is None or outlet is None:
+            self.host, self.outlet = self._determine_pdu_config()
+        else:
+            self.host = host
+            self.outlet = outlet
+
+        # print(f"Controlling {self.host} outlet {self.outlet}")
+
+        self.base_url = f"http://{self.host}"
+        self.session = requests.Session()
+        self.session.verify = False
+        self.token = None
+        self.csrf_token = None
+        self._login()
+        self._get_csrf_token()
+
+    def _login(self) -> None:
+        # Login to PDU and get token
+        login_url = f"{self.base_url}/login.cgi"
+        headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        data = {
+            "username": "obmc",
+            "password": "5f03f061d370c89d1608e64df3daaf2acb30b194",
+        }
+
+        try:
+            response = self.session.post(login_url, json=data, headers=headers)
+            response.raise_for_status()
+
+            if "Set-Cookie" in response.headers:
+                cookie_header = response.headers["Set-Cookie"]
+                token_match = re.search(r"token=([^;]+)", cookie_header)
+                if token_match:
+                    self.token = token_match.group(1)
+                    self.session.cookies.set(
+                        "token", self.token, domain=self.host, path="/"
+                    )
+                else:
+                    print("Failed to extract token from cookies")
+                    sys.exit(1)
+            else:
+                print("No token received")
+                sys.exit(1)
+
+        except requests.exceptions.RequestException as e:
+            print(f"Login failed: {e}")
+            sys.exit(1)
+
+    def _get_csrf_token(self) -> None:
+        # Get CSRF token from status page
+        try:
+            status_url = f"{self.base_url}/status.htm"
+            headers = {
+                "Accept": "text/html",
+                "Cookie": f"token={self.token}",
+            }
+            response = self.session.get(status_url, headers=headers)
+            response.raise_for_status()
+
+            csrf_match = re.search(
+                r'id="csrftoken"\s+value="([^"]+)"', response.text
+            )
+            if csrf_match:
+                self.csrf_token = csrf_match.group(1)
+            else:
+                print("Failed to extract CSRF token")
+                sys.exit(1)
+
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to get CSRF token: {e}")
+            sys.exit(1)
+
+    def _determine_pdu_config(self) -> Tuple[str, int]:
+        """
+        Determine PDU host and outlet based on local hostname.
+        Pattern: obmc-rpi-XX maps to:
+            - PI numbers: 01-98
+            - PDU numbers: 01-49
+            - Each PDU controls 2 PIs with 2 outlets
+            - Example:
+              rpi-01/02 -> pdu-01 outlet 1/2
+              rpi-03/04 -> pdu-02 outlet 1/2
+              rpi-97/98 -> pdu-49 outlet 1/2
+        """
+        local_hostname = socket.gethostname()
+
+        # Extract the PI number from hostname
+        match = re.match(r"obmc-rpi-(\d{2})", local_hostname)
+        if not match:
+            print(f"Invalid hostname format: {local_hostname}")
+            print("Expected format: obmc-rpi-XX where XX is 01-98")
+            sys.exit(1)
+
+        pi_number = int(match.group(1))
+
+        # Validate PI number range
+        if pi_number < 1 or pi_number > 98:
+            print(f"Invalid PI number: {pi_number}")
+            print("PI number must be between 01 and 98")
+            sys.exit(1)
+
+        # Calculate PDU number and outlet
+        pdu_number = (pi_number - 1) // 2 + 1  # Each PDU controls 2 PIs
+        outlet_number = (pi_number - 1) % 2 + 1  # odd -> 1, even -> 2
+
+        # Validate PDU number range
+        if pdu_number > 49:
+            print(f"Invalid PDU number calculated: {pdu_number}")
+            print("PDU number must be between 01 and 49")
+            sys.exit(1)
+
+        pdu_host = f"obmc-pdu-{pdu_number:02d}"
+
+        return (pdu_host, outlet_number)
+
+    def _get_status(self) -> bool:
+        # Get current outlet status. Returns True if on, False if off
+        try:
+            status_url = f"{self.base_url}/status_json.cgi"
+            headers = {
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{self.base_url}/status.htm",
+                "Cookie": f"token={self.token}",
+            }
+            params = {"_": int(time.time() * 1000)}
+
+            response = self.session.get(
+                status_url, headers=headers, params=params
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            # Outlet index is 0-based
+            return data["outlets"][self.outlet - 1]["status"]
+
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to get status: {e}")
+            sys.exit(1)
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
+            print(f"Failed to parse status response: {e}")
+            sys.exit(1)
+
+    def _control(self, action: str) -> None:
+        # Send control command to PDU
+        control_map = {
+            "toggle": 2,  # Toggle power state
+            "reset": 3,  # Reset/cycle power
+        }
+
+        if action not in control_map:
+            print(f"Invalid action: {action}")
+            return
+
+        # Check if trying to reset when power is off
+        if action == "reset" and not self._get_status():
+            print("Cannot reset/cycle when power is off")
+            return
+
+        control_url = f"{self.base_url}/control.cgi"
+        params = {
+            "target": self.outlet,
+            "control": control_map[action],
+            "time": int(time.time() * 1000),
+            "csrftoken": self.csrf_token,
+        }
+
+        headers = {
+            "Accept": "text/html",
+            "Referer": f"{self.base_url}/status.htm",
+            "Cookie": f"token={self.token}",
+        }
+
+        try:
+            response = self.session.get(
+                control_url, params=params, headers=headers
+            )
+            response.raise_for_status()
+            time.sleep(1)  # Wait for the action to take effect
+        except requests.exceptions.RequestException as e:
+            print(f"Control action failed: {e}")
+            sys.exit(1)
+
+    def _wait_for_status_change(
+        self, target_status: bool, timeout: int = 5
+    ) -> bool:
+        """
+        Wait for outlet status to change to target_status.
+        Returns True if status changed successfully, False if timed out.
+
+        Args:
+            target_status (bool): The desired status (True for on, False for off)
+            timeout (int): Maximum time to wait in seconds
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            current_status = self._get_status()
+            if current_status == target_status:
+                return True
+            time.sleep(0.5)  # Poll every 0.5 seconds
+        return False
+
+    def ac_on(self) -> None:
+        # Turn AC on
+        current_status = self._get_status()
+        if not current_status:
+            self._control("toggle")
+            if self._wait_for_status_change(True):
+                print("ac is on")
+            else:
+                print("Failed to turn ac on within 5 seconds")
+                sys.exit(1)
+        else:
+            print("ac is already on")
+
+    def ac_off(self) -> None:
+        # Turn AC off
+        current_status = self._get_status()
+        if current_status:
+            self._control("toggle")
+            if self._wait_for_status_change(False):
+                print("ac is off")
+            else:
+                print("Failed to turn ac off within 5 seconds")
+                sys.exit(1)
+        else:
+            print("ac is already off")
+
+    def ac_cycle(self, times: int = 1, period: int = 5) -> None:
+        """
+        Perform AC power cycle using the reset command.
+
+        Args:
+            times: Number of cycles to perform
+            period: Time in seconds between cycles
+        """
+        # Check initial power status
+        if not self._get_status():
+            print("Cannot reset/cycle when power is off")
+            return
+
+        print(f"Starting ac cycle: {times} times with {period}s period...")
+        for i in range(times):
+            print(f"\nCycle {i + 1}/{times}")
+
+            # Check current status
+            current_status = self._get_status()
+            if not current_status:
+                print("Outlet is already off, skipping reset")
+                continue
+
+            # Perform reset if outlet is on
+            self._control("reset")
+
+            if i < times - 1:  # Don't wait after the last cycle
+                time.sleep(period)
+
+            # Refresh CSRF token after each cycle
+            self._get_csrf_token()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="PDU AC Control Script")
+    parser.add_argument(
+        "action",
+        choices=["on", "off", "cycle"],
+        help="Action to perform: on, off, or cycle",
+    )
+    parser.add_argument(
+        "--times",
+        type=int,
+        default=1,
+        help="Number of cycles (only for cycle action, default: 1)",
+    )
+    parser.add_argument(
+        "--period",
+        type=int,
+        default=5,
+        help="Period in seconds for each state during cycle (default: 5)",
+    )
+    parser.add_argument("--host", help="Override PDU hostname")
+    parser.add_argument(
+        "--outlet",
+        type=int,
+        choices=[1, 2],
+        help="Override outlet number (1 or 2)",
+    )
+
+    args = parser.parse_args()
+
+    # Disable SSL warnings
+    requests.packages.urllib3.disable_warnings()
+
+    pdu = PDUController(args.host, args.outlet)
+
+    if args.action == "on":
+        pdu.ac_on()
+    elif args.action == "off":
+        pdu.ac_off()
+    elif args.action == "cycle":
+        pdu.ac_cycle(args.times, args.period)
+
+
+if __name__ == "__main__":
+    main()
