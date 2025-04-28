@@ -1,0 +1,7 @@
+IMG_NAME='obmc-raspios'
+RELEASE='bullseye'
+TARGET_HOSTNAME='obmc-unset-host'
+TIMEZONE_DEFAULT='Asia/Taipei'
+FIRST_USER_PASS='0penBmc'
+DISABLE_FIRST_BOOT_USER_RENAME='1'
+ENABLE_SSH='1'
