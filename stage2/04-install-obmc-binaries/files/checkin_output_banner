@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# set -x
+
+# Define column widths
+field_width=14
+value_width=69
+
+# Capture the output of the original checkin command
+output=$(checkin -p)
+
+# Extract data from the output
+user=$(echo "$output" | grep "User" | cut -d: -f2 | xargs)
+remaining_time=$(echo "$output" | grep "Remaining time" | cut -d: -f2- | xargs)
+description=$(echo "$output" | grep "Task Description" | cut -d: -f2 | xargs)
+
+# Set to "N/A" if it's empty
+if [ -z "$user" ]; then
+    user="N/A"
+fi
+
+if [ -z "$remaining_time" ]; then
+    remaining_time="N/A"
+fi
+
+if [ -z "$description" ]; then
+    description="N/A"
+fi
+
+# Calculate truncation length
+truncate_length=$((value_width - 3))
+
+# Ensure description is less than or equal to 69 characters
+if [ ${#description} -gt $value_width ]; then
+    description="${description:0:$truncate_length}..."
+fi
+
+# Define color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to pad strings to a certain length
+pad_string() {
+    local str="$1"
+    local length="$2"
+    printf "%-${length}s" "$str"
+}
+
+# Print formatted output with colors and lines using echo
+# Line limit to 90 chars
+echo -e "${BLUE}------------------------------------------------------------------------------------------${NC}"
+echo -e "${BLUE}|${NC} ${YELLOW}$(pad_string "User" $field_width)${NC} ${BLUE}|${NC} ${GREEN}$(pad_string "$user" $value_width)${NC} ${BLUE}|${NC}"
+echo -e "${BLUE}------------------------------------------------------------------------------------------${NC}"
+echo -e "${BLUE}|${NC} ${YELLOW}$(pad_string "Remaining Time" $field_width)${NC} ${BLUE}|${NC} ${GREEN}$(pad_string "$remaining_time" $value_width)${NC} ${BLUE}|${NC}"
+echo -e "${BLUE}------------------------------------------------------------------------------------------${NC}"
+echo -e "${BLUE}|${NC} ${YELLOW}$(pad_string "Description" $field_width)${NC} ${BLUE}|${NC} ${GREEN}$(pad_string "$description" $value_width)${NC} ${BLUE}|${NC}"
+echo -e "${BLUE}------------------------------------------------------------------------------------------${NC}\n"
+

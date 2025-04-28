@@ -1,0 +1,5 @@
+# Example configuration for BMC
+pu port             /dev/ttyUSB1
+pu baudrate         115200          # Set the baud rate
+pu rtscts           No
+
