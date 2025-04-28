@@ -1,5 +1,5 @@
 IMG_NAME='obmc-raspios'
-RELEASE='bullseye'
+RELEASE='bookworm'
 TARGET_HOSTNAME='obmc-unset-host'
 TIMEZONE_DEFAULT='Asia/Taipei'
 FIRST_USER_PASS='0penBmc'
